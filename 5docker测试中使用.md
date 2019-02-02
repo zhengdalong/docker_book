@@ -285,6 +285,150 @@ sudo docker run -p 4567 --name webapp --link redis:db -it -v $PWD/webapp_redis:/
 
 ## docker 持续集成
 
+### jenkins dockerfile
+
+```bash
+FROM jenkins
+MAINTAINER james@example.com
+ENV REFRESHED_AT 2016-06-01
+
+USER root
+RUN apt-get -qq update && apt-get install -qq sudo
+RUN echo "jenkins ALL=NOPASSWD: ALL" >> /etc/sudoers
+RUN wget http://get.docker.com/builds/Linux/x86_64/docker-latest.tgz
+RUN tar -xvzf docker-latest.tgz
+RUN mv docker/* /usr/bin/
+
+USER jenkins
+RUN /usr/local/bin/install-plugins.sh junit git git-client ssh-slaves greenballs chucknorris ws-cleanup
+```
+
+### dockerjenkins.sh脚本
+
+```bash
+#!/bin/bash
+
+# First, make sure that cgroups are mounted correctly.
+CGROUP=/sys/fs/cgroup
+
+[ -d $CGROUP ] ||
+  mkdir $CGROUP
+
+mountpoint -q $CGROUP ||
+  mount -n -t tmpfs -o uid=0,gid=0,mode=0755 cgroup $CGROUP || {
+    echo "Could not make a tmpfs mount. Did you use -privileged?"
+    exit 1
+  }
+
+# Mount the cgroup hierarchies exactly as they are in the parent system.
+for SUBSYS in $(cut -d: -f2 /proc/1/cgroup)
+do
+  [ -d $CGROUP/$SUBSYS ] || mkdir $CGROUP/$SUBSYS
+  mountpoint -q $CGROUP/$SUBSYS ||
+    mount -n -t cgroup -o $SUBSYS cgroup $CGROUP/$SUBSYS
+done
+
+# Now, close extraneous file descriptors.
+pushd /proc/self/fd
+for FD in *
+do
+  case "$FD" in
+  # Keep stdin/stdout/stderr
+  [012])
+    ;;
+  # Nuke everything else
+  *)
+    eval exec "$FD>&-"
+    ;;
+  esac
+done
+popd
+
+docker daemon &
+exec java -jar /opt/jenkins/jenkins.war
+```
+
+### 运行docker-jenkins镜像
+
+```bash
+sudo docker run -p 8080:8080 --name dalong_jenkins --privileged -d jenkins
+```
+
+### 用于jenkins作业的docker shell脚本
+
+```bash
+# Build the image to be used for this job.
+IMAGE=$(sudo docker build . | tail -1 | awk '{ print $NF }')
+
+# Build the directory to be mounted into Docker.
+MNT="$WORKSPACE/.."
+
+# Execute the build inside Docker.
+CONTAINER=$(sudo docker run -d -v $MNT:/opt/project/ $IMAGE /bin/bash -c 'cd /opt/project/workspace && rake spec')
+
+# Attach to the container so that we can see the output.
+sudo docker attach $CONTAINER
+
+# Get its exit code as soon as the container stops.
+RC=$(sudo docker wait $CONTAINER)
+
+# Delete the container we've just used.
+sudo docker rm $CONTAINER
+
+# Exit with the same value as that with which the process exited.
+exit $RC
+```
+
+### 用于测试作业的docker file
+
+```bash
+FROM ubuntu:18.04
+MAINTAINER dalong 'dalong@qq.com'
+ENV REFRESHED_AT 2014-06-01
+RUN apt-get update
+RUN apt-get -y install ruby rake
+RUN gem install --no-rdoc --no-ri rspec ci_reporter_rspec
+```
+
+### jenkins多配置脚本
+
+```bash
+# Build the image to be used for this run.
+cd $OS && IMAGE=$(sudo docker build . | tail -1 | awk '{ print $NF }')
+
+# Build the directory to be mounted into Docker.
+
+MNT="$WORKSPACE/.."
+
+# Execute the build inside Docker.
+CONTAINER=$(sudo docker run -d -v "$MNT:/opt/project" $IMAGE /bin/bash -c "cd /opt/project/$OS && rake spec")
+
+# Attach to the container's streams so that we can see the output.
+sudo docker attach $CONTAINER
+
+# As soon as the process exits, get its return value.
+RC=$(sudo docker wait $CONTAINER)
+
+# Delete the container we've just used to free disk space.
+sudo docker rm $CONTAINER
+
+# Exit with the same value that the process exited with.
+exit $RC
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
